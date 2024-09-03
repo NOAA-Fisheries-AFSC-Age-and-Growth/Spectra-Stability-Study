@@ -1,0 +1,157 @@
+---
+title: "Hsieh Time Series"
+author: "Esther Goldstein, Brenna Groom, Kathrin Bayer"
+format: html
+editor: visual
+editor_options: 
+  chunk_output_type: console
+---
+
+Code to analyze B. Hsieh time series stabilization study
+
+```{r}
+#load necessary packages
+
+library(readxl)
+library(splitstackshape)
+library(tidyverse)
+library(opusreader2)
+
+```
+
+Make a plot theme to use throughout so that all figures look the same and nice.
+
+
+```{r}
+
+
+#Set plot theme for all plots. You can change text size for plot labels here
+
+library(ggplot2)
+#set theme for plots
+plottheme<-function (base_size=10){ 
+  theme_bw()+ 
+  theme(panel.grid.major=element_blank(),
+        panel.grid.minor=element_blank(),
+        #axis.text= element_text(size=16),
+        #axis.title=element_text(size=14),
+       # legend.text=element_text(size=12),
+       # legend.title=element_text(size=10.5),
+        plot.title=element_text(size=12),
+        strip.text = element_text(size=12),
+        #legend.position = c(0.89, 0.5)
+        )
+}
+
+```
+
+Read in the metadata - Brenna exported the AGE3 metadata from NIR admin. All spectra from the entire time series
+Data are here J:\BHSIEH\10. Time Series Analysis\All Data
+
+```{r}
+
+setwd("J:/BHSIEH/10. Time Series Analysis/All Data/")
+
+??read_excel
+
+metadata_WP<-read_excel(path="All_Data.xlsx",sheet="WP")
+
+str(metadata_WP$session_title)
+metadata_WP$session_title
+
+unique(metadata_WP$session_title)
+levels(as.factor(as.character(metadata_WP$session_title)))
+
+#to split character string by position
+
+#look at the scan dates
+
+?cSplit
+
+metadata_WP<-splitstackshape::cSplit(indt=metadata_WP, splitCols="session_title", sep="_")
+
+metadata_WP<-rename(metadata_WP,scan_date="session_title_3", preservation="session_title_5")
+
+unique(metadata_WP$scan_date)
+
+metadata_WP$scan_date<-factor(metadata_WP$scan_date,levels=c(
+  "2019Aug",
+  "2019Sept",
+  "2019Oct",
+  "2019Nov",
+  "2019Dec",
+  "2020Jan",
+  "2020Feb",
+  "2020Apr",
+  "2020May",
+  "2020Jul",
+  "2020Aug",
+  "2022May"
+))
+
+
+```
+
+Read in spectra files. 
+We will not use Spectral Library because Brenna has read/write access. 
+SpectraLibrary is organized by species (common_name) year (collection_year) session_title file_name
+
+```{r}
+
+#this code can be used to read in from SpectraLibrary
+# setwd("Y:/REFM_AG_NIR_DATA/SpectraLibrary") #this won't set the file path if it has that red "x" in teh folder directory. I might need to click on it to open it once for this to work.
+# 
+# metadata_WP$file_path<-paste0(getwd(),"/",metadata_WP$common_name,"/",metadata_WP$collection_year,"/",metadata_WP$session_title,"/",metadata_WP$file_name)
+
+metadata_WP$file_path<-paste0(getwd(),"/",metadata_WP$file_name)
+
+Opusfiles<-as.vector(metadata_WP$file_path)
+
+#This part is just to double check that all files are there and avoid errors if any are missing
+exists<-as.vector(lapply(Opusfiles, file.exists))#check that I have all my files or else I get an error when I read them in
+
+metadata_WP$exists<-exists
+metadata_WP<-metadata_WP[metadata_WP$exists=="TRUE",] #filter the file list and data by otoliths with spectra files
+
+#Some file names were blank and it was giving me errors when reading in
+metadata_WP<-metadata_WP[complete.cases(metadata_WP$file_name), ]
+metadata_WP<-metadata_WP[metadata_WP$file_name != "", ]
+
+Opusfiles<-as.vector(metadata_WP$file_path) #I repeated this and wrote over it so I wouldn't have extra files to read in that don't exist and produce an error
+
+```
+
+Read in spectra files using filepaths from metadata
+
+```{r}
+#| include: false
+
+#Followed this thread to use a new package to read in OPUS files. https://github.com/pierreroudier/opusreader/issues/24 to https://github.com/spectral-cockpit/opusreader2
+# read a single file (one measurement) to make sure it works, then delete it if it looks good
+file <- Opusfiles[1]
+data_list <- read_opus(dsn = file)
+rm(data_list)
+rm(file)
+
+SPCfiles_nooffset<-lapply(Opusfiles,read_opus) #this gives an error if any file names or paths are wrong. So check that if there are issues. It also takes a VERY long time to read in the files
+
+#The code in the chunk above should filter for only files that exist, but if I get an error in the line above I can find the problem file where it stops in this loop
+#SPCfiles_nooffset<-list()
+#for (i in 1:length (Opusfiles)){
+# SPCfiles_nooffset[[i]]<-read_opus(Opusfiles[[i]])
+#}
+
+#This is just to figure out file structure. Some of the nested metadata is the info that the scanners populate in the OPUS interface. You can check scan settings here too
+#str(SPCfiles_nooffset[[1]]) # check first element
+head(SPCfiles_nooffset[[1]][[1]])
+  SPCfiles_nooffset[[1]][[1]]$ab$data
+  #can see spc values this way I think
+SPCfiles_nooffset[[1]][[1]]$lab_and_process_param_raw$parameters #this has info about what setting was used (here otolith), sepcies, and file name
+SPCfiles_nooffset[[1]][[1]]$lab_and_process_param_raw$parameters$FC2$parameter_value #species
+SPCfiles_nooffset[[1]][[1]]$lab_and_process_param_raw$parameters$FD1$parameter_value #unique ID. Then paste with .0 to get full file name
+SPCfiles_nooffset[[1]][[1]]$ab$wavenumbers
+SPCfiles_nooffset[[1]][[1]]$instrument_ref$parameters$INS$parameter_value #instrument name
+
+```
+
+Stopped here 9/3/24. Copy more code from QA QC code to finish this
