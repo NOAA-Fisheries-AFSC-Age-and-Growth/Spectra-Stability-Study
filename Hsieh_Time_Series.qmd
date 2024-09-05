@@ -7,6 +7,9 @@ editor_options:
   chunk_output_type: console
 ---
 
+Notes: For analysis we will do PCAs to see if there is consistent directional drift
+Then we will do PLS models with a heatmap of predictions for each iteration. Might need to scale RMSE values in color coding to account for if models predicted poorly for themselves too. 
+
 Code to analyze B. Hsieh time series stabilization study
 
 ```{r}
@@ -105,6 +108,9 @@ SpectraLibrary is organized by species (common_name) year (collection_year) sess
 
 metadata_WP$file_path<-paste0(getwd(),"/",metadata_WP$file_name)
 
+head(metadata_WP)
+
+#Opusfiles<-metadata_WP$file_path
 Opusfiles<-as.vector(metadata_WP$file_path)
 
 #This part is just to double check that all files are there and avoid errors if any are missing
@@ -143,9 +149,10 @@ SPCfiles_nooffset<-lapply(Opusfiles,read_opus) #this gives an error if any file 
 
 #This is just to figure out file structure. Some of the nested metadata is the info that the scanners populate in the OPUS interface. You can check scan settings here too
 #str(SPCfiles_nooffset[[1]]) # check first element
+SPCfiles_nooffset[[1]]
 head(SPCfiles_nooffset[[1]][[1]])
-  SPCfiles_nooffset[[1]][[1]]$ab$data
-  #can see spc values this way I think
+SPCfiles_nooffset[[1]][[1]]$ab$data
+#can see spc values this way I think
 SPCfiles_nooffset[[1]][[1]]$lab_and_process_param_raw$parameters #this has info about what setting was used (here otolith), sepcies, and file name
 SPCfiles_nooffset[[1]][[1]]$lab_and_process_param_raw$parameters$FC2$parameter_value #species
 SPCfiles_nooffset[[1]][[1]]$lab_and_process_param_raw$parameters$FD1$parameter_value #unique ID. Then paste with .0 to get full file name
@@ -154,4 +161,181 @@ SPCfiles_nooffset[[1]][[1]]$instrument_ref$parameters$INS$parameter_value #instr
 
 ```
 
-Stopped here 9/3/24. Copy more code from QA QC code to finish this
+Extract spectra and add filenames to keep track of specimens. It's best to use the file names because if AGE3 was not used for some scans, then the metadata won't be nested in OPUS
+
+```{r}
+#| include: false
+
+spectra<-lapply(SPCfiles_nooffset, function (x) x[[1]]$ab$data)#the the spectra data from opus files
+spectra[[1]]
+
+instrument<-lapply(SPCfiles_nooffset,function (x) x[[1]]$instrument_ref$parameters$INS$parameter_value) #instrument exists for all files 
+
+wavenumber<-lapply(SPCfiles_nooffset,function (x) x[[1]]$ab$wavenumbers)#these could differ if settings changed or in light sources change
+
+spectra<-lapply(spectra,as.data.frame) #turn the list of spectra files into a dataframe because it's easier to workw ith
+
+#str(spectra[[1]]) #if i want to check it out and make sure list items look right
+
+for (i in 1:length(spectra)){
+  colnames(spectra[[i]])<-wavenumber[[i]] #need to assign column  names first or else there will be an issue with subsequent names added
+}
+
+#keep track of the instrument
+for (i in 1:length(spectra)){
+  spectra[[i]]$instrument<-instrument[[i]] 
+}
+
+#keep track of the file path
+for (i in 1:length(spectra)){
+  spectra[[i]]$file_path<-Opusfiles[[i]]
+}
+
+library(tidyr)
+#I need to get the file names from the long list
+file_name<-lapply(spectra, function (x) splitstackshape::cSplit(as.data.frame(x$file_path),sep="/",splitCols="x$file_path")%>%dplyr::select(tail(names(.), 1)))%>%type.convert(.,as.is=TRUE)
+#got this warning: In type.convert.default(X[[i]], ...) :
+  #'as.is' should be specified by the caller; using TRUE. I tried nesting type.convert(.,as.is=TRUE) in various places. Either got errors or the warning remained, but this seems to work still. Will trouble shoot if there are issues
+  
+file_name[[1]][[1,1]] #check the structure
+
+#keep track of file names
+for (i in 1:length(spectra)){
+  spectra[[i]]$file_name<-file_name[[i]][[1,1]]
+}
+
+```
+
+Check to see if all files have the same number of wavenumbers. If not, interpolate. This manual right now and will require review. Later it could be more automated as an ifelse statement.
+
+```{r}
+#| include: false
+
+library(prospectr)
+
+nlengths<-vector()
+for (i in 1:length(spectra)){
+  l<-length(spectra[[i]])
+nlengths[[i]]<-l
+  }
+summary(nlengths)
+
+#Exploring the files a little here
+longindex<-match(max(nlengths),nlengths) #this gives the first one that matches the criteria
+longindex
+spectra[longindex] 
+names(spectra[[longindex]])
+str(spectra[[longindex]]$file_name)
+Opusfiles[longindex]
+
+shortindex<-match(min(nlengths),nlengths)#this should give the index of the first item that has the shortest number of wavenumbers. Then I can use these values for my interpolations
+shortindex
+length(spectra[[shortindex]])
+Opusfiles[shortindex]
+#This was actually scanned on the Tango. I dont' want these spectra lengths
+
+longindexall<-which(nlengths %in% max(nlengths)) #this gives the index for each item that matches the criteria
+longindexall
+shortindexall<-which(nlengths %in% min(nlengths))  #the criteria
+shortindexall
+normindexall<-which(nlengths %in% median(nlengths))
+normindexall
+
+spectra[normindexall[1]] 
+spectra[longindexall[1]] 
+spectra[shortindexall[1]]
+
+#Now we usually want use the short index to select the wavenumbers we want to interpolate to. 
+names(spectra[[shortindex]])
+wavenumbers<-head(names(spectra[[shortindex]]),-3) #removes the last 3 items that weren't wavenumbers. This will be consistent as long as I use the same code above. If that code changes to include more columns, then there will be an issue
+
+wavenumbers #can visually inspect that it ends on the correct wavenumber by comparing with names(spectra[[shortindex]]). Can also write in some sort of ifelse to check it it does or doesn't
+
+# #trial before the loop to use spline interpolation to match wavenumbers
+# m<-dplyr::select(spectra[[2]],c(instrument, file_path,file_name))
+#   s<-dplyr::select(spectra[[2]],-c(instrument, file_path,file_name))
+#          newv<-resample(s, wav=names(s),new.wav=wavenumbers,interpol="spline")
+#          spcmatch<-as.data.frame(newv)
+#           spcmatch$instrument<-m$instrument
+#            spcmatch$file_path<-m$file_path
+#             spcmatch$file_name<-m$file_name
+# 
+# #if it worked, then just delete the intermediate steps so I don't store too much                
+# rm(m)         
+# rm(s)           
+# rm(newv)
+# rm(spcmatch)
+
+?resample
+#now resample them all
+spectramatch<-list()
+for (i in 1:length(spectra)){
+m<-dplyr::select(spectra[[i]],c(instrument, file_path,file_name))
+  s<-dplyr::select(spectra[[i]],-c(instrument, file_path,file_name))
+         newv<-resample(s, wav=names(s),new.wav=wavenumbers,interpol="spline")#this is a decisions to use spline and can be changed
+         spcmatch<-as.data.frame(newv)
+          spcmatch$instrument<-m$instrument
+           spcmatch$file_path<-m$file_path
+            spcmatch$file_name<-m$file_name
+spectramatch[[i]]<-spcmatch
+}
+
+spectramatch[[1]]
+
+#check that all the spectra files have the same number of wavenumbers
+lengths<-vector()
+for (i in 1:length(spectramatch)){
+  l<-length(spectramatch[[i]])
+lengths[[i]]<-l
+  }
+summary(lengths)
+
+#looks good! 
+rm(spectra)
+```
+
+Make the dataframe
+
+```{r}
+#| include: false
+
+df <- as.data.frame(do.call(rbind,spectramatch))
+head(df)
+names(df)
+rm(spectramatch)
+
+#df$file_name<-paste0(df$species,"_",df$file_id,".0",sep="")
+head(df$file_name)
+head(metadata_WP$file_name)
+
+dfmeta<-dplyr::left_join(df,metadata_WP,by="file_name")#note that instrument names are different in the metadata file vs. OPUS files. 
+names(dfmeta)
+#dfmeta<-dfmeta%>%dplyr::select(.,-c(instrument.x,instrument.y))#removing some extra columns from the join
+
+rm(df) #removing a dataframe that I don't need
+
+colnames(dfmeta)<-as.character(colnames(dfmeta)) #make the column names characters
+
+names(dfmeta)
+dfmeta<-dfmeta %>%
+  mutate(across(everything(), as.character))
+
+dfmeta_long<-tidyr::pivot_longer(dfmeta, cols=c(1:which( colnames(dfmeta)=="instrument")-1)) #make it long format to plot it. The negative column selection didn't work if I had file_name minus 2 columns. But it did work for file_path minus 1. Not sure why https://stackoverflow.com/questions/68073762/issue-with-selecting-negative-values-in-dplyr-with-embrace-arg
+
+dfmeta_long<-dfmeta_long%>%rename(.,"wavenumber"="name")
+dfmeta_long$wavenumber<-as.numeric(as.character(dfmeta_long$wavenumber))
+dfmeta_long$collection_year<-as.factor(as.character(dfmeta_long$collection_year))
+dfmeta_long$instrument_name<-as.factor(as.character(dfmeta_long$instrument_name))
+dfmeta_long$wavenumber<-as.numeric(as.character(dfmeta_long$wavenumber))
+
+dfmeta_long<-dfmeta_long[!is.na(dfmeta_long$collection_year),]
+dfmeta_long$value<-as.numeric(as.character(dfmeta_long$value))
+
+#For this trial run, I want to look at 2019 and 2021 data. So for 2019, I tried to first keep only data from before 2019, but this was only 600 datapoints and my outlier plots were identifying too many outliers since the 2019 dataset is huge. So I'll keep 2021 in there. More like a cross-validation. Then I'll re-do this with data up to 2020 for my "2021 scenario"
+levels(dfmeta_long$collection_year)
+dfmeta_long<-dfmeta_long[dfmeta_long$collection_year %in% c("2014","2015","2019"),]
+dfmeta_long<-dfmeta_long[dfmeta_long$instrument!="Tango",] #one messed up file
+
+#rm(list=ls()[! ls() %in% c("mpadf_long","meta","plottheme")]) #free up stored memory
+```
+
