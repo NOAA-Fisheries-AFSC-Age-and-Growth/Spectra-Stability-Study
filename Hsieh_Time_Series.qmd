@@ -7,8 +7,7 @@ editor_options:
   chunk_output_type: console
 ---
 
-Notes: For analysis we will do PCAs to see if there is consistent directional drift
-Then we will do PLS models with a heatmap of predictions for each iteration. Might need to scale RMSE values in color coding to account for if models predicted poorly for themselves too. 
+Notes: For analysis we will do PCAs to see if there is consistent directional drift Then we will do PLS models with a heatmap of predictions for each iteration. Might need to scale RMSE values in color coding to account for if models predicted poorly for themselves too.
 
 Code to analyze B. Hsieh time series stabilization study
 
@@ -23,7 +22,6 @@ library(opusreader2)
 ```
 
 Make a plot theme to use throughout so that all figures look the same and nice.
-
 
 ```{r}
 
@@ -48,8 +46,7 @@ plottheme<-function (base_size=10){
 
 ```
 
-Read in the metadata - Brenna exported the AGE3 metadata from NIR admin. All spectra from the entire time series
-Data are here J:\BHSIEH\10. Time Series Analysis\All Data
+Read in the metadata - Brenna exported the AGE3 metadata from NIR admin. All spectra from the entire time series Data are here J:\BHSIEH\\10. Time Series Analysis\All Data
 
 ```{r}
 
@@ -89,15 +86,15 @@ metadata_WP$scan_date<-factor(metadata_WP$scan_date,levels=c(
   "2020May",
   "2020Jul",
   "2020Aug",
+  "2020Sept",
+  "2020Oct",
   "2022May"
 ))
 
 
 ```
 
-Read in spectra files. 
-We will not use Spectral Library because Brenna has read/write access. 
-SpectraLibrary is organized by species (common_name) year (collection_year) session_title file_name
+Read in spectra files. We will not use Spectral Library because Brenna has read/write access. SpectraLibrary is organized by species (common_name) year (collection_year) session_title file_name
 
 ```{r}
 
@@ -331,11 +328,69 @@ dfmeta_long$wavenumber<-as.numeric(as.character(dfmeta_long$wavenumber))
 dfmeta_long<-dfmeta_long[!is.na(dfmeta_long$collection_year),]
 dfmeta_long$value<-as.numeric(as.character(dfmeta_long$value))
 
-#For this trial run, I want to look at 2019 and 2021 data. So for 2019, I tried to first keep only data from before 2019, but this was only 600 datapoints and my outlier plots were identifying too many outliers since the 2019 dataset is huge. So I'll keep 2021 in there. More like a cross-validation. Then I'll re-do this with data up to 2020 for my "2021 scenario"
 levels(dfmeta_long$collection_year)
-dfmeta_long<-dfmeta_long[dfmeta_long$collection_year %in% c("2014","2015","2019"),]
-dfmeta_long<-dfmeta_long[dfmeta_long$instrument!="Tango",] #one messed up file
+# dfmeta_long<-dfmeta_long[dfmeta_long$collection_year %in% c("2014","2015","2019"),]
+# dfmeta_long<-dfmeta_long[dfmeta_long$instrument!="Tango",] #one messed up file
 
 #rm(list=ls()[! ls() %in% c("mpadf_long","meta","plottheme")]) #free up stored memory
 ```
+
+Plot the spectra
+```{r}
+
+names(dfmeta)
+names(dfmeta_long)
+
+#make a plot with a subset of the data to make sure it works
+ggplot()+
+  geom_line(data=dfmeta_long[dfmeta_long$scan_date=="2019Dec",],aes(x=wavenumber,y=value,group=file_name))+
+  #geom_point(data=dfmeta_long[dfmeta_long$scan_date=="2019Nov",],aes(x=wavenumber,y=value,group=file_name))+
+  scale_x_reverse()+
+  plottheme()+
+labs(x=expression(paste("Wavenumber (",cm^-1,")")),y="Raw absorbance")
+
+#plot all the data
+ggplot()+
+  geom_line(data=dfmeta_long,aes(x=wavenumber,y=value,group=file_name,color=scan_date))+
+  scale_x_reverse()+
+  plottheme()+
+labs(x=expression(paste("Wavenumber (",cm^-1,")")),y="Raw absorbance")+
+  facet_wrap(~scan_date)
+
+#trouble shoot. What are the NA values for scan dates? We went back and fixed this above
+# check<-dfmeta_long[is.na(dfmeta_long$scan_date),]
+# str(check$timestamp)
+# unique(as.Date(check$timestamp)) #We are missing Sept and Oct 2020 
+
+```
+
+Preprocess the spectra for analysis. There are many different options and packages in R to do this. MSC, SG, etc.
+
+We need to use the wide format dataframe for this
+```{r}
+
+names(dfmeta)
+
+dfmeta<-dfmeta %>% mutate_at(1:921, as.numeric) 
+
+#do the SG filter and rebind the columns with the metadata in the dataframe in one go. This creates a wide format preprocessed dataframe
+dfproc<-as.data.frame(cbind(dfmeta[,c(922:length(dfmeta))], prospectr::savitzkyGolay(dfmeta[,1:921],m=1,p=2,w=17))) 
+
+#now make a long format dataframe with SG preprocessed data so that we can plot it
+names(dfproc)
+dfproc_long<-tidyr::pivot_longer(dfproc, cols=c(46:length(dfproc))) #make it long format to plot it
+names(dfproc_long)
+dfproc_long$name<-as.numeric(as.character(dfproc_long$name))
+dfproc_long<-dfproc_long%>%rename(.,"wavenumber"="name")
+str(dfproc_long$wavenumber)
+
+ggplot()+
+  geom_line(data=dfproc_long,aes(x=wavenumber,y=value,group=file_name,color=scan_date))+
+  scale_x_reverse()+
+  plottheme()+
+labs(x=expression(paste("Wavenumber (",cm^-1,")")),y="Proprocessed absorbance")#+
+  #facet_wrap(~scan_date)
+
+```
+
 
