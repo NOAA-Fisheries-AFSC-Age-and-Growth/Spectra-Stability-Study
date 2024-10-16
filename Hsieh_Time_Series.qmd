@@ -336,6 +336,7 @@ levels(dfmeta_long$collection_year)
 ```
 
 Plot the spectra
+
 ```{r}
 
 names(dfmeta)
@@ -367,6 +368,7 @@ labs(x=expression(paste("Wavenumber (",cm^-1,")")),y="Raw absorbance")+
 Preprocess the spectra for analysis. There are many different options and packages in R to do this. MSC, SG, etc.
 
 We need to use the wide format dataframe for this
+
 ```{r}
 
 names(dfmeta)
@@ -391,6 +393,84 @@ ggplot()+
 labs(x=expression(paste("Wavenumber (",cm^-1,")")),y="Proprocessed absorbance")#+
   #facet_wrap(~scan_date)
 
+#save.image()
+
 ```
 
+subset our preprocessed data to only have wn \<=7500
+
+```{r}
+
+dfproc_sub<-dfproc[,-c(46:527)] #column names are characters so we manually looked at the df to find the column names >7500 to remove, could create a vector to do this too
+names(dfproc_sub)
+
+names(dfproc_long)
+str(dfproc_long$wavenumber)
+dfproc_long_sub<-dfproc_long[dfproc_long$wavenumber<= 7500 ,]
+
+#minwn<-round(min(dfproc_long$wavenumber),digits=3)
+
+```
+
+Do a PCA. We will only use wavenumber \<=7500. Wide format dataframe has to be used for PCA
+
+```{r}
+
+names(dfproc_sub)
+?pca
+
+pca_proc <- mdatools::pca(x=dfproc_sub[,c(46:length(dfproc_sub))], center=TRUE,scale=FALSE) # 'scale=TRUE' calls for a standardization
+summary(pca_proc)
+plot(pca_proc)
+
+eigfish <- pca_proc$eigenvals   # Here you will get the eigenvalues
+
+#varsc0<-as.data.frame(pca_proc$loadings) #to choose scaling to plot
+objsc0<-as.data.frame(pca_proc$calres$scores)
+#varsc0$ID<-rownames(varsc0)
+
+
+#scale it for ggplot
+Spectrascores<-as.data.frame(cbind(objsc0$`Comp 1`,objsc0$`Comp 2`,objsc0$`Comp 3`))
+colnames(Spectrascores)<-c("PCs1","PCs2","PCs3")
+
+#SpecVec<-as.data.frame(cbind(varsc0$`Comp 1`,varsc0$`Comp 2`,varsc0$`Comp 3`))
+#head(SpecVec)
+#colnames(SpecVec)<-c("PC1","PC2","PC3")
+
+#To automatially extract % explained by each axis for plots
+PC1perc<-round(pca_proc$eigenvals[1]/sum(pca_proc$eigenvals),digits=4)*100
+PC2perc<-round(pca_proc$eigenvals[2]/sum(pca_proc$eigenvals),digits=4)*100
+
+library(ggplot2)
+#library(grid) #to draw arrows
+
+Spectrascores<-cbind(Spectrascores,dfproc_sub[,1:45])
+
+pcaplot<-ggplot()+
+  geom_hline(yintercept=0,color="gray")+
+  geom_vline(xintercept=0,color="gray")+
+  geom_point(data=Spectrascores,aes(x=PCs1,y=PCs2,color=scan_date,group=file_name),size=1.5,alpha=.4)+#this is site score, ie the indiv, 
+  labs(x=paste("PC1 (",PC1perc,"%)",sep=""), y=paste("PC2 (",PC2perc,"%)",sep=""))+
+  scale_color_viridis_d(option="turbo")+
+ # scale_size_continuous(range=c(2,7),breaks=c(0,20,40,60,80),name="otolith weight (g)")+
+ # scale_fill_manual(values=c("red","blue"),name="")+
+  theme_bw()+ 
+  theme(panel.grid.major=element_blank(),panel.grid.minor=element_blank(),axis.text= element_text(size=16),
+        axis.title=element_text(size=16,face="bold"),
+        legend.text=element_text(size=12),
+        legend.title=element_text(size=10.5),
+        plot.title=element_text(size=16, face="bold"),
+        strip.text.x = element_text(size=14),
+        #legend.position = c(0.89, 0.5)
+        )+
+facet_grid(instrument~preservation)
+pcaplot
+
+levels(as.factor(as.character(Spectrascores$final_age)))
+check<-Spectrascores[is.na(Spectrascores$final_age),]
+
+```
+
+Do PCAs with GlyThy and Dry separately. Then do PCA score mean and ellipse to show drift through time Maybe exclude specimen 8 and 28 since they weren't aged
 
